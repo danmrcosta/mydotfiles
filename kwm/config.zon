@@ -1,0 +1,757 @@
+// #############################################################################
+// kwm config.zon — desktop otimizado para programação, teclado e jogos
+// Migrado de Hyprland (dwindle) para River 0.4.x + kwm (modelo master-stack,
+// filosofia dwm). Reescrito do zero, não é o exemplo padrão editado.
+//
+// Princípios seguidos nesta config:
+//   1. Zero processos supérfluos (bar interna desligada, sem blur/animação).
+//   2. Modelo mental "dwm": não existe foco/movimento espacial (esquerda/
+//      direita/cima/baixo) como no Hyprland dwindle. O kwm (como o river e o
+//      dwm) organiza janelas em master + stack, e navegação é por CICLO
+//      (próxima/anterior), não por direção geográfica. Isso é explicado em
+//      cada bind que precisou de adaptação.
+//   3. Baixa latência: sem cursor warp, sem animações, sem opacidade.
+// #############################################################################
+
+.{
+    // =========================================================================
+    // 1. VARIÁVEIS DE AMBIENTE — repassadas a todo processo spawnado pelo kwm
+    // =========================================================================
+    // Equivalente às linhas `env = ...` do hyprland.conf. Como o kwm inicia os
+    // processos filhos (startup_cmds e spawn/spawn_shell), ele PRECISA repassar
+    // essas variáveis para eles; não adianta exportar só no shell de login.
+    .env = .{
+        // --- NVIDIA + Wayland -----------------------------------------------
+        // GBM_BACKEND=nvidia-drm: força o backend GBM a usar o driver nvidia-drm
+        // em vez de tentar detecção genérica (evita fallback errado/software).
+        .{ "GBM_BACKEND", "nvidia-drm" },
+        // __GLX_VENDOR_LIBRARY_NAME=nvidia: garante que o GLX use a lib da NVIDIA
+        // e não uma implementação Mesa concorrente instalada no sistema.
+        .{ "__GLX_VENDOR_LIBRARY_NAME", "nvidia" },
+        // LIBVA_DRIVER_NAME=nvidia: faz decodificação de vídeo via VA-API usar o
+        // driver da NVIDIA (importante se você assiste vídeo/streaming).
+        .{ "LIBVA_DRIVER_NAME", "nvidia" },
+        // WLR_NO_HARDWARE_CURSORS=1: em muitas combinações de driver NVIDIA +
+        // wlroots o cursor por hardware "some" ou fica corrompido em multi-GPU/
+        // escala. Forçar cursor por software resolve isso ao custo de ~0.1ms de
+        // CPU por frame — troca que vale a pena para estabilidade visual.
+        // Se sua GPU/driver não apresentar esse bug, pode remover para ganhar
+        // uns micro-segundos de latência de cursor.
+        .{ "WLR_NO_HARDWARE_CURSORS", "1" },
+        // XDG_SESSION_TYPE=wayland: sinaliza para apps (toolkits Qt/GTK, Electron,
+        // etc.) que a sessão é Wayland nativa, evitando que tentem X11/XWayland
+        // por padrão quando suportam ambos.
+        .{ "XDG_SESSION_TYPE", "wayland" },
+        // XDG_CURRENT_DESKTOP / XDG_SESSION_DESKTOP: alguns apps (portals GTK,
+        // Electron, VSCode) usam isso para decidir tema, atalhos e portals
+        // corretos (ex.: file picker do GTK).
+        .{ "XDG_CURRENT_DESKTOP", "river" },
+        .{ "XDG_SESSION_DESKTOP", "river" },
+        // QT_QPA_PLATFORM=wayland: força apps Qt (ex.: alguns diálogos, OBS) a
+        // rodar nativamente em Wayland em vez de cair no XWayland.
+        .{ "QT_QPA_PLATFORM", "wayland" },
+        // MOZ_ENABLE_WAYLAND=1: Firefox nativo em Wayland (menor input lag que
+        // via XWayland). Inofensivo se você não usa Firefox.
+        .{ "MOZ_ENABLE_WAYLAND", "1" },
+        // Tamanho de cursor consistente entre todos os toolkits (GTK/Qt/XCursor).
+        .{ "XCURSOR_SIZE", "24" },
+    },
+
+    // Diretório de trabalho dos processos spawnados. `.home` evita processos
+    // herdando um cwd aleatório (ex.: o diretório onde o kwm foi iniciado).
+    .working_directory = .home,
+
+    // =========================================================================
+    // 2. STARTUP — equivalente aos `exec-once` do Hyprland
+    // =========================================================================
+    // Só o essencial roda aqui. PipeWire/WirePlumber já sobem via systemd user
+    // units (não precisam de exec-once). Nada de waybar, nada de daemons
+    // redundantes.
+    .startup_cmds = .{
+
+        .{ "wlr-randr", "--output", "eDP-2", "--scale", "1.5" },
+
+        // Papel de parede estático via swaybg. Ajuste o caminho da imagem.
+        .{ "swaybg", "-m", "fill", "-i", "/home/dan/Pictures/1406005.jpg" },
+
+        // REMOVIDO: nm-applet. Ele só desenha ícone em um systray real
+        // (protocolo StatusNotifierItem), e a bar nativa do kwm não
+        // implementa systray — então o ícone nunca aparecia em lugar
+        // nenhum. O estado de wifi agora vem como texto/glifo direto na
+        // bar, via nmcli, no script abaixo.
+
+        // Filtro de temperatura de cor. -O 4000 = modo manual fixo em 4000K
+        // (equivalente ao que você já usava). Alternativa mais leve seria
+        // usar o modo geolocalizado automático (`gammastep`, sem -O), mas
+        // mantive fixo para não introduzir uma requisição de rede/geoip no
+        // login.
+        .{ "gammastep", "-O", "4000" },
+
+        // hypridle: apesar do nome, usa o protocolo padrão `ext-idle-notify-v1`
+        // (não é exclusivo do Hyprland), então funciona sob River/kwm desde
+        // que o wlroots do seu River o exponha — o que ele faz. Se notar que
+        // o idle não dispara, a alternativa mais leve e "nativa" do ecossistema
+        // wlroots é `swayidle` (mesmo protocolo, zero dependência de libhyprutils).
+        .{ "hypridle" },
+
+        // REMOVIDO: quickshell e toda a barra em JS associada a ela.
+        // A barra agora é 100% a bar nativa do kwm (dwm-like). Ela não
+        // tem systray/ícones clicáveis de verdade — só texto — então
+        // "ícones" de wifi e de apps em 2º plano (OBS, Spotify...) são
+        // glifos de uma Nerd Font escritos no fifo de status pelo script
+        // abaixo. É o mesmo padrão de dwmblocks/slstatus, só que via
+        // fifo em vez de xsetroot. Ajuste o caminho se seu usuário não
+        // for "dan".
+        .{ "sh", "-c", "$HOME/.config/kwm/scripts/statusbar.sh" },
+},
+
+    // Tema de cursor: null = usa o padrão do sistema/GTK. Defina explicitamente
+    // só se seu tema de cursor não estiver sendo detectado corretamente.
+    // Ex.: .{ .name = "Bibata-Modern-Classic", .size = 24 }
+    .xcursor_theme = null,
+
+    // Cor de fundo sólida do compositor: DEVE ficar null porque o swaybg é
+    // quem desenha o papel de parede via startup_cmds. Se deixar um valor
+    // aqui, ele fica por cima e o swaybg nunca aparece.
+    .background = null,
+
+    // =========================================================================
+    // 3. BARRA INTERNA DO KWM — ATIVA (substitui o quickshell)
+    // =========================================================================
+    // A barra nativa é estilo dwm: texto puro, sem systray de verdade.
+    // "Ícones" de wifi e dos apps em 2º plano (OBS, Spotify, Discord...)
+    // são glifos de Nerd Font escritos no fifo abaixo pelo script
+    // scripts/statusbar.sh — por isso a fonte TEM que ser uma Nerd Font
+    // instalada no sistema (troque o nome se usar outra família, ex.:
+    // "FiraCode Nerd Font", "Hack Nerd Font"...).
+.bar = .{
+    .show_default = true,
+    .position = .top,
+    .font = "JetBrainsMono Nerd Font:size=10",
+    .scheme = .{
+        .normal = .{ .fg = 0xe0e0e0ff, .bg = 0x000000ff },
+        .select = .{ .fg = 0x000000ff, .bg = 0xe0e0e0ff },
+    },
+    .tags = .{
+        .tags = .{ "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX" },
+        .click = .{
+            .left = .{ .set_output_tag = .{ .tag = .{ .tag = 0 } } },
+            .right = .{ .toggle_output_tag = .{ .mask = 0 } },
+            .middle = .{ .toggle_window_tag = .{ .mask = 0 } },
+        },
+    },
+    .mode = null,
+    .layout = null,
+    .title = null,
+    // Fifo que o script scripts/statusbar.sh alimenta com wifi + apps
+    // rodando + data/hora/ano. Se seu build do kwm usar outro nome de
+    // campo/variante pra isso (confira com `kwm --help` ou o config.zig
+    // de referência do seu fork), é só trocar aqui — a ideia é a mesma:
+    // texto vindo de um fifo em vez de null.
+    .status = .{ .fifo = "/home/dan/.cache/kwm/statusbar.fifo" },
+    .override_colors = .{},
+
+},
+
+// =========================================================================
+    // 4. COMPORTAMENTO GERAL DE FOCO / MULTI-MONITOR / LATÊNCIA
+    // =========================================================================
+
+    // false = cada output (monitor) mantém seu próprio conjunto de tags ativo,
+    // de forma independente. Em setup com múltiplos monitores isso é o
+    // comportamento "correto" tipo dwm (cada monitor é seu próprio espaço de
+    // trabalho). Se você usar só 1 monitor, este valor é irrelevante na
+    // prática. true forçaria todos os monitores a sempre mostrarem a mesma
+    // tag — útil só se você quer espelhar/sincronizar workspaces entre telas.
+    .single_tagset = false,
+
+    // false = foco só muda por clique/teclado, nunca por o mouse simplesmente
+    // "passar por cima" de uma janela (focus-follows-mouse). Para programação
+    // isso é essencial: você não quer perder foco do editor só porque o mouse
+    // encostou em outra janela sem querer. Trade-off: em setups multi-monitor
+    // você precisa clicar/usar atalho para trocar de tela em vez de só mover
+    // o mouse — aceitável pela previsibilidade que ganha.
+    .sloppy_focus = false,
+
+    // .none = o cursor NUNCA é teleportado automaticamente. Isso evita
+    // "saltos" de cursor ao trocar de foco/monitor, que são desorientadores
+    // e custam um pequeno overhead de processamento a cada troca de foco.
+    // Alternativas: .on_focus_changed (bom para quem usa muito mouse e quer
+    // sempre "achar" a janela ativa) e .on_output_changed (só ao trocar de
+    // monitor). Para um fluxo teclado-first, .none é o mais previsível.
+    .cursor_warp = .none,
+
+    // Não estamos usando `scroller` como layout padrão (veja seção 6), então
+    // isso é neutro no dia a dia, mas mantive false: quando você alternar
+    // para scroller manualmente, o wrap-around (voltar ao início ao passar do
+    // último item) é uma conveniência de navegação, não um problema de
+    // performance.
+    .disable_wrap_around_for_scroller = false,
+
+    // true: janelas flutuantes (ex.: pavucontrol, diálogos) reabrem na mesma
+    // posição/tamanho da última vez. Reduz fricção — você não precisa
+    // reposicionar a mesma janela de configurações toda vez que ela reabre.
+    .remember_floating_geometry = true,
+
+    // true: auto swallow ligado — abrir um app "gráfico" de dentro de um
+    // terminal (ex.: `nvim`, `lazygit`, `htop`) faz o terminal ser
+    // "engolido" visualmente pelo filho, e ele reaparece quando o filho
+    // fecha. Pedido explícito seu; também casa bem com is_terminal=true no
+    // window_rule do Alacritty (seção 8).
+    .auto_swallow = true,
+
+    // -------------------------------------------------------------------
+    // Modo de anexação de novas janelas por layout.
+    // -------------------------------------------------------------------
+    // Filosofia: o editor deve permanecer no master enquanto você abre
+    // janelas auxiliares (terminal, docs, etc.), então a maioria dos layouts
+    // usa `.stack_top` (nova janela entra no TOPO da pilha secundária, NÃO
+    // vira master, NÃO tira o foco do que você já estava editando).
+    // scroller usa `.below_focused` (a nova janela aparece logo depois da
+    // atualmente focada, mantendo ordem espacial previsível no scroll
+    // horizontal).
+    .default_attach_mode = .{
+        .tile = .stack_top,
+        .grid = .top,
+        .monocle = .top,
+        .deck = .stack_top,
+        .scroller = .below_focused,
+        .centered_master = .stack_top,
+        .float = .top,
+    },
+
+    // .ssd: o kwm desenha a borda/decoração (necessário para o `.border`
+    // abaixo funcionar de forma consistente entre apps GTK/Qt/Electron
+    // diferentes). .csd deixaria cada app decidir sua própria decoração,
+    // o que quebraria a estética minimalista uniforme que você quer.
+    .default_window_decoration = .ssd,
+
+    // Borda fina, poucas cores, estilo dwm — nada de gradiente/opacidade.
+    .border = .{
+        .width = 2,
+        .color = .{
+            .focus = 0x3a3a3aff,    // cinza escuro: janelas ativas, discreto
+            .unfocus = 0xe0e0e0ff,      // cinza claro quase branco: janela inativa
+            .swallowing = 0x5a6a8aff, // azul-acinzentado: indica swallow ativo
+        },
+    },
+
+    // =========================================================================
+    // 5. LAYOUT PADRÃO — análise e escolha
+    // =========================================================================
+    // Comparei tile / deck / centered_master / monocle / scroller para
+    // programação:
+    //
+    //   - monocle: uma janela por vez, tela cheia. Ótimo para foco profundo,
+    //     ruim quando você precisa VER editor + terminal juntos. Melhor como
+    //     alternância manual (SUPER+M), não como padrão.
+    //   - deck: parecido com monocle, mas mostra a pilha "por trás" do
+    //     master. Bom híbrido, mas ainda esconde o terminal/stack por
+    //     completo enquanto o master ocupa a tela toda.
+    //   - centered_master: master centralizado, stacks nas laterais. Ótimo
+    //     em ultrawide, mas desperdiça largura em monitores 16:9 comuns e
+    //     quebra o hábito visual de "editor à esquerda, terminal à direita".
+    //   - scroller (estilo PaperWM): excelente para MUITOS terminais/buffers
+    //     em sequência horizontal infinita, mas tem curva de aprendizado e
+    //     não é o análogo mais direto do dwindle do Hyprland.
+    //   - tile (master-stack clássico dwm): master à esquerda (editor),
+    //     stack à direita (terminal/docs/logs). É o mais previsível, o mais
+    //     próximo do modelo mental que o dwindle do Hyprland te deu
+    //     (divisão editor/terminal lado a lado), e é o layout em que TODOS
+    //     os binds de mfact/nmaster fazem mais sentido intuitivo.
+    //
+    // Escolhido: TILE como padrão. monocle, deck, scroller e centered_master
+    // continuam disponíveis via atalho (T/G/D/M/S/U) para trocar quando o
+    // contexto pedir.
+    .default_layout = .tile,
+
+    .layout = .{
+        .tile = .{
+            .nmaster = 1,
+            .mfact = 0.55,       // editor ganha ~55% da largura, terminal 45%
+            .inner_gap = 6,      // gaps pequenos: mais espaço útil de tela,
+            .outer_gap = 6,      // menos "decoração", mais código visível
+            .master_location = .left,
+        },
+        .grid = .{
+            .outer_gap = 6,
+            .inner_gap = 6,
+            .direction = .horizontal,
+        },
+        .monocle = .{
+            .gap = 4, // quase nenhuma margem: janela única, aproveite tudo
+        },
+        .deck = .{
+            .nmaster = 1,
+            .mfact = 0.55,
+            .inner_gap = 6,
+            .outer_gap = 6,
+            .master_location = .left,
+        },
+        .scroller = .{
+            .mfact = 0.5,
+            .inner_gap = 8, // gap um pouco maior para separar colunas
+            .outer_gap = 6, // visualmente ao rolar horizontalmente
+        },
+        .centered_master = .{
+            .nmaster = 1,
+            .mfact = 0.55,
+            .inner_gap = 6,
+            .outer_gap = 6,
+            .direction = .horizontal,
+        },
+    },
+
+    // =========================================================================
+    // 6. BINDINGS
+    // =========================================================================
+    .bindings = .{
+        // Delay reduzido de 300ms -> 250ms e rate mantida em 50: repetição de
+        // tecla começa mais rápido, útil para ajustar mfact/gap/nmaster em
+        // sequência sem esperar. Não subi mais a rate para não perder
+        // precisão (repeat rápido demais facilmente "passa do ponto" ao
+        // segurar h/l ajustando mfact).
+        .repeat_info = .{
+            .rate = 50,
+            .delay = 250,
+        },
+
+        .key = .{
+            // ---------------------------------------------------------------
+            // Utilitário / sistema
+            // ---------------------------------------------------------------
+            .{
+                .keysym = "r",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .reload_config } },
+            },
+            .{
+                .keysym = "Escape",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .switch_mode = .{ .mode = "passthrough" } } } },
+            },
+            .{
+                .mode = "passthrough",
+                .keysym = "Escape",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .switch_mode = .{ .mode = "default" } } } },
+            },
+
+            // ---------------------------------------------------------------
+            // Apps — igual ao Hyprland
+            // ---------------------------------------------------------------
+            // SUPER+Return -> terminal
+            .{
+                .keysym = "Return",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .spawn = .{ .argv = .{ "alacritty" } } } } },
+            },
+            // SUPER+D -> launcher (rofi). Nota de eficiência: se seu objetivo
+            // for reduzir ainda mais dependências, `fuzzel` é Wayland-nativo
+            // (não precisa de XWayland, diferente do rofi) e abre mais rápido
+            // a frio. Como o rofi só roda sob demanda (não é processo
+            // persistente), o ganho é só no tempo de abertura, não em RAM
+            // ociosa — por isso mantive rofi, que é o que você já usa e
+            // conhece.
+            .{
+                .keysym = "d",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .spawn_shell = .{ .cmd = "rofi -show drun" } } } },
+            },
+            // SUPER+E -> gerenciador de arquivos
+            .{
+                .keysym = "e",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .spawn = .{ .argv = .{ "pcmanfm" } } } } },
+            },
+
+            // ---------------------------------------------------------------
+            // Janela: fechar / sair / estado
+            // ---------------------------------------------------------------
+            // SUPER+Shift+Q -> fecha a janela focada (= killactive do Hyprland)
+            .{
+                .keysym = "q",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .close } },
+            },
+            // SUPER+Shift+E -> sai da sessão
+            .{
+                .keysym = "e",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .quit = .{ .exit_session = true, .hook = null } } } },
+            },
+            // SUPER+F -> "fullscreen,1" do seu Hyprland era na verdade MAXIMIZE
+            // (a janela cresce, mas continua fazendo parte do layout — outras
+            // janelas/tags continuam existindo, não é um "exclusive
+            // fullscreen"). toggle_maximize é o equivalente direto disso no
+            // kwm.
+            .{
+                .keysym = "f",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .toggle_maximize } },
+            },
+            // Bônus: fullscreen EXCLUSIVO de verdade (cobre até a área da
+            // bar), caso um dia precise dele além do maximize acima.
+            .{
+                .keysym = "f",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .toggle_fullscreen = .{ .in_window = false } } } },
+            },
+            // SUPER+Space -> floating (pedido explícito seu)
+            .{
+                .keysym = "space",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .toggle_floating } },
+            },
+
+            // ---------------------------------------------------------------
+            // Foco — ADAPTAÇÃO NECESSÁRIA (leia isto)
+            // ---------------------------------------------------------------
+            // O Hyprland (dwindle) tem foco ESPACIAL: movefocus l/r/u/d anda
+            // fisicamente pela tela. O river/kwm (como o dwm) usa modelo
+            // MASTER-STACK: não existe "janela à esquerda" ou "à direita" no
+            // sentido geométrico, existe MASTER e STACK, e navegação é por
+            // CICLO (próximo/anterior item na pilha).
+            //
+            // A adaptação mais fiel à memória muscular do dwm/kwm (e que já
+            // vem sugerida no próprio exemplo padrão do kwm) é:
+            //   SUPER+J / SUPER+K -> cicla foco entre janelas (frente/trás)
+            //   SUPER+H / SUPER+L -> ajusta o mfact (encolhe/cresce o master)
+            // Isso preserva o "H e L mexem no eixo horizontal, J e K mexem
+            // verticalmente no que está focado" — só que aplicado ao conceito
+            // certo (proporção do master, não posição de janela).
+            .{
+                .keysym = "j",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .focus_iter = .{ .direction = .forward } } } },
+            },
+            .{
+                .keysym = "k",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .focus_iter = .{ .direction = .reverse } } } },
+            },
+            .{
+                .keysym = "l",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .modify_mfact = .{ .change = .{ .step = 0.01 } } } } },
+            },
+            .{
+                .keysym = "h",
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .click = .{ .pressed = .{ .modify_mfact = .{ .change = .{ .step = -0.01 } } } } },
+            },
+            // Ciclo pulando janelas flutuantes — útil quando você tem várias
+            // flutuantes abertas (ex.: pavucontrol) e só quer alternar entre
+            // as tiladas.
+            .{
+                .keysym = "j",
+                .modifiers = .{ .mod4 = true, .ctrl = true },
+                .event = .{ .click = .{ .pressed = .{ .focus_iter = .{ .direction = .forward, .skip = .floating } } } },
+            },
+            .{
+                .keysym = "k",
+                .modifiers = .{ .mod4 = true, .ctrl = true },
+                .event = .{ .click = .{ .pressed = .{ .focus_iter = .{ .direction = .reverse, .skip = .floating } } } },
+            },
+            // Volta o foco direto pro master (equivalente a "ir pro editor")
+            .{
+                .keysym = "h",
+                .modifiers = .{ .mod4 = true, .ctrl = true },
+                .event = .{ .click = .{ .pressed = .focus_master_return } },
+            },
+            .{
+                .keysym = "l",
+                .modifiers = .{ .mod4 = true, .ctrl = true },
+                .event = .{ .click = .{ .pressed = .focus_master_return } },
+            },
+
+            // ---------------------------------------------------------------
+            // Mover janela — mesma adaptação master-stack
+            // ---------------------------------------------------------------
+            // SUPER+Shift+J/K -> troca a posição da janela focada com a
+            // vizinha na pilha (equivalente mais próximo de "mover pra
+            // cima/baixo" que existe no modelo master-stack).
+            .{
+                .keysym = "j",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .swap = .{ .direction = .forward } } } },
+            },
+            .{
+                .keysym = "k",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .swap = .{ .direction = .reverse } } } },
+            },
+            // SUPER+Shift+H/L -> move a COLUNA master para a esquerda/direita
+            // da tela (o análogo mais próximo de "mover a janela
+            // horizontalmente" quando o conceito de janela individual não
+            // existe nesse eixo — quem se move é o master como um todo).
+            .{
+                .keysym = "h",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .modify_master_location = .{ .location = .left } } } },
+            },
+            .{
+                .keysym = "l",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .modify_master_location = .{ .location = .right } } } },
+            },
+            // Bônus (não pedido, mas gratuito): master no topo/embaixo,
+            // útil em monitor vertical ou pra terminal embaixo do editor.
+            .{
+                .keysym = "j",
+                .modifiers = .{ .mod4 = true, .mod1 = true },
+                .event = .{ .click = .{ .pressed = .{ .modify_master_location = .{ .location = .bottom } } } },
+            },
+            .{
+                .keysym = "k",
+                .modifiers = .{ .mod4 = true, .mod1 = true },
+                .event = .{ .click = .{ .pressed = .{ .modify_master_location = .{ .location = .top } } } },
+            },
+
+            // ---------------------------------------------------------------
+            // Tags (workspaces) 1-9 — SUPER+número
+            // ---------------------------------------------------------------
+            // Diferença importante vs. Hyprland: o kwm usa TAGS por bitmask
+            // (como dwm), convencionalmente 9 (uma por bit, teclas 1-9), e a
+            // tecla 0 não é uma "10ª tag" — ela mostra TODAS as tags de uma
+            // vez (0b111111111), que é um recurso do dwm que o Hyprland não
+            // tem. Não existe workspace 10 de verdade; se você precisar de
+            // mais de 9 espaços de trabalho nomeados, use combinações de tags
+            // (uma janela pode pertencer a mais de uma tag ao mesmo tempo).
+            .{ .keysym = "1", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b1 } } } } } },
+            .{ .keysym = "2", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b10 } } } } } },
+            .{ .keysym = "3", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b100 } } } } } },
+            .{ .keysym = "4", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b1000 } } } } } },
+            .{ .keysym = "5", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b10000 } } } } } },
+            .{ .keysym = "6", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b100000 } } } } } },
+            .{ .keysym = "7", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b1000000 } } } } } },
+            .{ .keysym = "8", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b10000000 } } } } } },
+            .{ .keysym = "9", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b100000000 } } } } } },
+            .{ .keysym = "0", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .tag = 0b111111111 } } } } } },
+
+            // SUPER+Shift+número -> move a janela focada pra tag N
+            // (0 = manda a janela para TODAS as tags, efeito "sticky")
+            .{ .keysym = "1", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b1 } } } } } },
+            .{ .keysym = "2", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b10 } } } } } },
+            .{ .keysym = "3", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b100 } } } } } },
+            .{ .keysym = "4", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b1000 } } } } } },
+            .{ .keysym = "5", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b10000 } } } } } },
+            .{ .keysym = "6", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b100000 } } } } } },
+            .{ .keysym = "7", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b1000000 } } } } } },
+            .{ .keysym = "8", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b10000000 } } } } } },
+            .{ .keysym = "9", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b100000000 } } } } } },
+            .{ .keysym = "0", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .tag = 0b111111111 } } } } } },
+
+            // Bônus dwm: SUPER+Ctrl+número TOGGLE uma tag na visualização
+            // atual (ver múltiplas tags ao mesmo tempo), e SUPER+Ctrl+Shift+
+            // número adiciona/remove a janela focada de uma tag adicional
+            // sem tirá-la das outras. Recursos nativos úteis, mantidos.
+            .{ .keysym = "1", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b1 } } } } },
+            .{ .keysym = "2", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b10 } } } } },
+            .{ .keysym = "3", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b100 } } } } },
+            .{ .keysym = "4", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b1000 } } } } },
+            .{ .keysym = "5", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b10000 } } } } },
+            .{ .keysym = "6", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b100000 } } } } },
+            .{ .keysym = "7", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b1000000 } } } } },
+            .{ .keysym = "8", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b10000000 } } } } },
+            .{ .keysym = "9", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .{ .toggle_output_tag = .{ .mask = 0b100000000 } } } } },
+
+            .{ .keysym = "1", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b1 } } } } },
+            .{ .keysym = "2", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b10 } } } } },
+            .{ .keysym = "3", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b100 } } } } },
+            .{ .keysym = "4", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b1000 } } } } },
+            .{ .keysym = "5", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b10000 } } } } },
+            .{ .keysym = "6", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b100000 } } } } },
+            .{ .keysym = "7", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b1000000 } } } } },
+            .{ .keysym = "8", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b10000000 } } } } },
+            .{ .keysym = "9", .modifiers = .{ .mod4 = true, .ctrl = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .toggle_window_tag = .{ .mask = 0b100000000 } } } } },
+
+            // Cicla entre saídas (monitores) que têm janelas — só importa em
+            // multi-monitor, inofensivo em single-monitor.
+            .{ .keysym = "period", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .focus_output_iter = .{ .direction = .forward } } } } },
+            .{ .keysym = "comma", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .focus_output_iter = .{ .direction = .reverse } } } } },
+            .{ .keysym = "period", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .send_to_output = .{ .direction = .forward } } } } },
+            .{ .keysym = "comma", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .send_to_output = .{ .direction = .reverse } } } } },
+
+            // Volta pra tag anterior (equivalente a "alt-tab de workspace")
+            .{ .keysym = "Tab", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .switch_to_previous_tag } } },
+
+            // Pula pra próxima/anterior tag OCUPADA (pula tags vazias — ótimo
+            // pra navegar rápido só entre onde você realmente tem janelas)
+            .{ .keysym = "apostrophe", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .occupied = .forward } } } } } },
+            .{ .keysym = "semicolon", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .set_output_tag = .{ .tag = .{ .occupied = .reverse } } } } } },
+            .{ .keysym = "apostrophe", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .unoccupied = .forward } } } } } },
+            .{ .keysym = "semicolon", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .set_window_tag = .{ .tag = .{ .unoccupied = .reverse } } } } } },
+
+            // ---------------------------------------------------------------
+            // Layouts — troca rápida entre os layouts analisados na seção 5
+            // ---------------------------------------------------------------
+            .{ .keysym = "t", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .tile } } } } },
+            .{ .keysym = "g", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .grid } } } } },
+            .{ .keysym = "d", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .deck } } } } },
+            .{ .keysym = "m", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .monocle } } } } },
+            .{ .keysym = "s", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .scroller } } } } },
+            .{ .keysym = "u", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .centered_master } } } } },
+            .{ .keysym = "f", .modifiers = .{ .mod4 = true, .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .switch_layout = .{ .layout = .float } } } } },
+            // Volta pro layout usado antes da última troca
+            .{ .keysym = "grave", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .switch_to_previous_layout } } },
+
+            // ---------------------------------------------------------------
+            // Ajustes finos de layout
+            // ---------------------------------------------------------------
+            .{ .keysym = "equal", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .modify_nmaster = .{ .change = .increase } } } } },
+            .{ .keysym = "minus", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .modify_nmaster = .{ .change = .decrease } } } } },
+            .{ .keysym = "equal", .modifiers = .{ .mod4 = true, .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .modify_gap = .{ .step = 1 } } } } },
+            .{ .keysym = "minus", .modifiers = .{ .mod4 = true, .mod1 = true }, .event = .{ .click = .{ .pressed = .{ .modify_gap = .{ .step = -1 } } } } },
+
+            // ---------------------------------------------------------------
+            // Toggles diversos (recursos nativos úteis do kwm, mantidos)
+            // ---------------------------------------------------------------
+            .{ .keysym = "Return", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .{ .zoom = .{ .swap = true } } } } },
+            .{ .keysym = "s", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .click = .{ .pressed = .toggle_sticky } } },
+            .{ .keysym = "a", .modifiers = .{ .mod4 = true }, .event = .{ .click = .{ .pressed = .toggle_swallow } } },
+            .{ .keysym = "a", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .toggle_auto_swallow } } },
+            .{ .keysym = "g", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .toggle_grid_direction } } },
+            .{ .keysym = "u", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .toggle_centered_master_direction } } },
+
+            // ---------------------------------------------------------------
+            // Modo floating (manipulação de janelas flutuantes via teclado)
+            // ---------------------------------------------------------------
+            // SUPER+Ctrl+F entra num modo modal onde HJKL move, Ctrl+HJKL
+            // redimensiona, e Shift+HJKL encaixa (snap) nas bordas. Sai
+            // sozinho ao soltar a combinação (`auto_quit`). Recurso 100%
+            // nativo do kwm, útil pra ajustar flutuantes sem sair do
+            // teclado — mantido do exemplo original.
+            .{
+                .keysym = "f",
+                .modifiers = .{ .mod4 = true, .ctrl = true },
+                .event = .{ .click = .{ .pressed = .{ .switch_mode = .{ .mode = "floating", .auto_quit = .once_unbound_pressed } } } },
+            },
+            .{ .mode = "floating", .keysym = "l", .modifiers = .{ .mod4 = true }, .event = .{ .repeat = .{ .move = .{ .step = .{ .horizontal = 10 } } } } },
+            .{ .mode = "floating", .keysym = "h", .modifiers = .{ .mod4 = true }, .event = .{ .repeat = .{ .move = .{ .step = .{ .horizontal = -10 } } } } },
+            .{ .mode = "floating", .keysym = "j", .modifiers = .{ .mod4 = true }, .event = .{ .repeat = .{ .move = .{ .step = .{ .vertical = 10 } } } } },
+            .{ .mode = "floating", .keysym = "k", .modifiers = .{ .mod4 = true }, .event = .{ .repeat = .{ .move = .{ .step = .{ .vertical = -10 } } } } },
+            .{ .mode = "floating", .keysym = "l", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .repeat = .{ .resize = .{ .step = .{ .horizontal = 10 } } } } },
+            .{ .mode = "floating", .keysym = "h", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .repeat = .{ .resize = .{ .step = .{ .horizontal = -10 } } } } },
+            .{ .mode = "floating", .keysym = "j", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .repeat = .{ .resize = .{ .step = .{ .vertical = 10 } } } } },
+            .{ .mode = "floating", .keysym = "k", .modifiers = .{ .mod4 = true, .ctrl = true }, .event = .{ .repeat = .{ .resize = .{ .step = .{ .vertical = -10 } } } } },
+            .{ .mode = "floating", .keysym = "l", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .snap = .{ .edge = .right } } } } },
+            .{ .mode = "floating", .keysym = "h", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .snap = .{ .edge = .left } } } } },
+            .{ .mode = "floating", .keysym = "j", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .snap = .{ .edge = .bottom } } } } },
+            .{ .mode = "floating", .keysym = "k", .modifiers = .{ .mod4 = true, .shift = true }, .event = .{ .click = .{ .pressed = .{ .snap = .{ .edge = .top } } } } },
+
+            // ---------------------------------------------------------------
+            // Screenshots (grim/slurp — não há ação nativa, então chamamos
+            // scripts próprios via `sh -c` para poder usar pipes/`$HOME`)
+            // ---------------------------------------------------------------
+            .{
+                .keysym = "Print",
+                .modifiers = .{},
+                .event = .{ .click = .{ .pressed = .{ .spawn = .{ .argv = .{ "sh", "-c", "$HOME/.config/kwm/scripts/screenshot-full.sh" } } } } },
+            },
+            .{
+                .keysym = "s",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .spawn = .{ .argv = .{ "sh", "-c", "$HOME/.config/kwm/scripts/screenshot-select.sh" } } } } },
+            },
+
+            // ---------------------------------------------------------------
+            // Mídia / brilho — argv direto, sem shell (mais rápido, sem pipe
+            // necessário aqui). .repeat permite segurar a tecla para
+            // ajuste contínuo, .click é disparo único (mute é toggle).
+            // ---------------------------------------------------------------
+            .{
+                .keysym = "XF86AudioRaiseVolume",
+                .modifiers = .{},
+                .event = .{ .repeat = .{ .spawn = .{ .argv = .{ "wpctl", "set-volume", "-l", "1.0", "@DEFAULT_AUDIO_SINK@", "5%+" } } } },
+            },
+            .{
+                .keysym = "XF86AudioLowerVolume",
+                .modifiers = .{},
+                .event = .{ .repeat = .{ .spawn = .{ .argv = .{ "wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "5%-" } } } },
+            },
+            .{
+                .keysym = "XF86AudioMute",
+                .modifiers = .{},
+                .event = .{ .click = .{ .pressed = .{ .spawn = .{ .argv = .{ "wpctl", "set-mute", "@DEFAULT_AUDIO_SINK@", "toggle" } } } } },
+            },
+            .{
+                .keysym = "XF86MonBrightnessUp",
+                .modifiers = .{},
+                .event = .{ .repeat = .{ .spawn = .{ .argv = .{ "brightnessctl", "set", "5%+" } } } },
+            },
+            .{
+                .keysym = "XF86MonBrightnessDown",
+                .modifiers = .{},
+                .event = .{ .repeat = .{ .spawn = .{ .argv = .{ "brightnessctl", "set", "5%-" } } } },
+            },
+
+            // SUPER+Shift+Return -> terminal extra rápido (bônus, gratuito)
+            .{
+                .keysym = "Return",
+                .modifiers = .{ .mod4 = true, .shift = true },
+                .event = .{ .click = .{ .pressed = .{ .spawn = .{ .argv = .{ "alacritty" } } } } },
+            },
+        },
+
+        // -------------------------------------------------------------------
+        // Mouse: SUPER+arrastar move, SUPER+botão-direito redimensiona.
+        // Mesmo comportamento que Hyprland `bindm`.
+        // -------------------------------------------------------------------
+        .pointer = .{
+            .{
+                .mode = "default",
+                .button = .left,
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .pressed = .pointer_move },
+            },
+            .{
+                .mode = "default",
+                .button = .right,
+                .modifiers = .{ .mod4 = true },
+                .event = .{ .pressed = .pointer_resize },
+            },
+        },
+    },
+
+    // =========================================================================
+    // 7. WINDOW RULES — apenas para os apps que você realmente usa
+    // =========================================================================
+    .window_rules = .{
+        // Fallback: qualquer janela SEM app_id (diálogos genéricos, alguns
+        // portals) abre flutuando — evita diálogo minúsculo tentando ocupar
+        // metade da tela no layout tile.
+        .{ .app_id = .{ .str = "", .match_null = true }, .floating = true },
+
+        // Diálogos do GTK file-picker (portal usado por Firefox, apps
+        // sandboxed, etc.)
+        .{ .app_id = .{ .str = "xdg-desktop-portal-gtk" }, .floating = true },
+
+        // zenity (caixas de diálogo simples que scripts podem chamar)
+        .{ .app_id = .{ .str = "zenity" }, .floating = true },
+
+        // Rofi sempre flutuando (ele já se auto-dimensiona, tilar quebraria
+        // o visual do launcher)
+        .{ .app_id = .{ .str = "rofi" }, .floating = true },
+
+        // Alacritty: marca como terminal (habilita swallow) e define um
+        // scroller_mfact para quando você alternar pro layout scroller.
+        // OBS: confira o app_id real do seu Alacritty (normalmente
+        // "Alacritty" com A maiúsculo); se o swallow não funcionar, esse é
+        // o primeiro lugar a checar.
+        .{ .app_id = .{ .str = "Alacritty" }, .is_terminal = true, .scroller_mfact = 0.8 },
+
+        // Adicione aqui regras específicas de outros apps que for usando,
+        // seguindo o mesmo padrão: .{ .app_id = .{ .str = "..." }, ... }
+    },
+
+    // =========================================================================
+    // 8. OUTPUT RULES — vazio por padrão (setup de 1 monitor)
+    // =========================================================================
+    // Exemplo caso adicione um segundo monitor no futuro:
+    //   .{ .name = .{ .str = "DP-2" }, .presentation_mode = .vsync },
+    .output_rules = .{
+        //
+    },
+
+}
