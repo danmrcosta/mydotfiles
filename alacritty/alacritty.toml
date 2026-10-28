@@ -7,15 +7,15 @@ blur = false   # Sem firulas modernas de desfoque
 padding = { x = 12, y = 12 } 
 
 [colors.primary]
-# Cinza-grafite bem escuro, estilo monitor antigo (destaca a seleção azul-marinho #000080)
-background = '#161616' 
+# Cinza médio-escuro, estilo terminal retro (destaca a seleção azul-marinho #000080)
+background = '#2e2e2e' 
 
 # O cinza-claro clássico do Retroism, mas agora usado no texto
 foreground = '#c0c0c0' 
 
 [colors.cursor]
 # Cursor em bloco cinza-claro, bem anos 90
-text = '#161616'
+text = '#2e2e2e'
 cursor = '#c0c0c0'
 
 [colors.selection]
@@ -25,7 +25,7 @@ text = '#ffffff'
 
 # Paleta ANSI adaptada para o "Retroism Dark" (Cores sólidas e menos saturadas)
 [colors.normal]
-black = '#161616'
+black = '#2e2e2e'
 red = '#a83232'
 green = '#32a852'
 yellow = '#a8a832'
