@@ -7,15 +7,15 @@ blur = false   # Sem firulas modernas de desfoque
 padding = { x = 12, y = 12 } 
 
 [colors.primary]
-# Um cinza-grafite escuro industrial (o famoso "Dark Charcoal" das interfaces antigas)
-background = '#242526' 
+# Cinza-grafite bem escuro, estilo monitor antigo (destaca a seleção azul-marinho #000080)
+background = '#161616' 
 
 # O cinza-claro clássico do Retroism, mas agora usado no texto
 foreground = '#c0c0c0' 
 
 [colors.cursor]
 # Cursor em bloco cinza-claro, bem anos 90
-text = '#242526'
+text = '#161616'
 cursor = '#c0c0c0'
 
 [colors.selection]
@@ -25,7 +25,7 @@ text = '#ffffff'
 
 # Paleta ANSI adaptada para o "Retroism Dark" (Cores sólidas e menos saturadas)
 [colors.normal]
-black = '#242526'
+black = '#161616'
 red = '#a83232'
 green = '#32a852'
 yellow = '#a8a832'
@@ -45,10 +45,18 @@ cyan = '#55ffff'
 white = '#ffffff'
 
 [font]
-size = 13.0
+size = 16.0
+
+[font.bold]
+family = "JetBrainsMono Nerd Font"
+style = "Bold"
+
+[font.italic]
+family = "JetBrainsMono Nerd Font"
+style = "Italic"
 
 [font.normal]
-family = "Source Code Pro"
+family = "JetBrainsMono Nerd Font"
 style = "Regular"
 
 [[keyboard.bindings]]
